@@ -15,7 +15,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from room import run_step, run_decision
 
@@ -24,10 +24,22 @@ load_dotenv()
 app = FastAPI(title="AI Consultation Rooms")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# The static file can live in different places depending on how the function is
+# bundled (local run vs. Vercel lambda), so probe a few likely locations.
+_INDEX_CANDIDATES = [
+    os.path.join(HERE, "static", "index.html"),
+    os.path.join(os.path.dirname(HERE), "static", "index.html"),
+    os.path.join(os.getcwd(), "static", "index.html"),
+    "static/index.html",
+]
+
 
 @app.get("/")
 async def index():
-    return FileResponse(os.path.join(HERE, "static", "index.html"))
+    for path in _INDEX_CANDIDATES:
+        if os.path.exists(path):
+            return FileResponse(path)
+    return HTMLResponse("<h1>UI file not found</h1>", status_code=500)
 
 
 def _sse(event, data):
