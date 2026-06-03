@@ -1,68 +1,73 @@
 # 🪑 AI Consultation Rooms
 
 A proof-of-concept where several AI personas sit in a "room", debate a topic you
-give them, **challenge each other** instead of just agreeing, and reach a
-decision. You watch it happen live in the browser, including which persona
-"raises a hand" to speak each round.
+give them, **search the web**, **challenge each other** instead of just agreeing,
+and **stop once they reach consensus**. You watch it happen live in the browser,
+including which persona "raises a hand" to speak each round.
 
 ## How it works
 
+Each round:
+
 ```
-┌─────────────────────────────────────────────┐
-│  Each round:                                 │
-│  1. Bidding  → every persona scores how       │
-│     urgently it wants to speak (0–10) + why   │
-│  2. The highest bidder speaks (its reply is   │
-│     streamed token-by-token to the screen)    │
-│  3. Repeat for N rounds                        │
-│  4. A neutral Facilitator forces a decision   │
-└─────────────────────────────────────────────┘
+1. Bidding   → every persona scores how urgently it wants to speak (0–10) + why
+2. Research  → the chosen speaker may use the web-search tool (DuckDuckGo)
+3. Speaking  → the chosen speaker's reply is streamed token-by-token
+4. Consensus → a neutral Facilitator judges whether the room has converged
 ```
 
-- **Personas** live in `personas.py` (Maya, Karim, Lina, Omar). Each has a
-  system prompt. Shared `HOUSE_RULES` push them to disagree, raise objections,
-  and avoid the usual "AI agrees with everyone" behaviour.
-- **Orchestration** lives in `room.py` (the round loop, bidding, streaming).
-- **Web layer** is `app.py` (FastAPI + Server-Sent Events) and `static/index.html`.
-- **Model access** is via [OpenRouter](https://openrouter.ai) — one HTTP API for
-  many models.
+The meeting ends as soon as the Facilitator detects genuine consensus, or when
+the max-round cap is hit (whichever comes first). Then the Facilitator writes a
+closing decision (agreements / open disagreements / recommendation).
 
-## Run it
+The loop is driven **from the browser**: it holds the transcript and calls the
+server once per round. That keeps every request short, which is what lets it run
+on serverless (Vercel).
+
+### Files
+
+| File | Role |
+|------|------|
+| `personas.py` | The 4 personas + `HOUSE_RULES` (force disagreement, then converge) + all prompt builders |
+| `room.py` | One round of orchestration: bidding, the search tool, streamed speaking, consensus check |
+| `app.py` | FastAPI: `POST /api/step` (one round) and `POST /api/decision` (closing) |
+| `static/index.html` | Live chat UI: raised-hands panel, streamed messages, "🔎 searched the web" notes |
+| `api/index.py`, `vercel.json` | Vercel serverless entrypoint + config |
+
+## Run locally
 
 ```bash
-# 1. create a virtual env and install deps
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 2. add your OpenRouter key
-cp .env.example .env
-#    then edit .env and paste your key (https://openrouter.ai/keys)
-
-# 3. start it
-python app.py
+python app.py            # open http://localhost:8000
 ```
 
-Open <http://localhost:8000>, type a topic, and press **Start meeting**.
+Paste your OpenRouter key in the field at the top of the page (get one free at
+<https://openrouter.ai/keys>). The key is sent per-request and never stored
+server-side. You can also set `OPENROUTER_API_KEY` in a `.env` file instead.
 
-## Cost / your 1000-requests-a-day limit
+## Model & cost
 
-Per round the app makes **N bid calls + 1 speaking call** (N = number of
-personas, currently 4 → 5 calls/round). The final decision is 1 more call.
-A 6-round meeting ≈ **31 requests**. With 1000/day you can run ~30 meetings.
+Defaults to a **free** model: `meta-llama/llama-3.3-70b-instruct:free`. Change it
+with `OPENROUTER_MODEL` in `.env`, or list more at <https://openrouter.ai/models>.
 
-To use less: lower the round count, remove personas, or switch to a `:free`
-model in `.env` (set `OPENROUTER_MODEL`).
+Calls per round = **4 bids + 1 research + 1 speak + 1 consensus = ~7**, plus 1
+for the final decision. A meeting that converges in ~5 rounds ≈ **36 requests**.
+With the 1000 requests/day free tier that's ~25 meetings/day. To use less: lower
+the round cap, or set `ENABLE_SEARCH = False` in `room.py`.
 
-## Tweak it
+## Deploy to Vercel
 
-- **Personas / their personalities** → `personas.py`
-- **Number of rounds** → the field in the UI (or the `rounds` query param)
-- **Make debate sharper / softer** → edit `HOUSE_RULES` in `personas.py`
-- **Model** → `OPENROUTER_MODEL` in `.env`
+The repo is Vercel-ready (`api/index.py` + `vercel.json`). Push it and import the
+repo on Vercel, or deploy from the CLI. No server secrets are required because
+the API key is entered in the UI.
+
+> Note: on Vercel's serverless runtime, a round's tokens may arrive in a batch at
+> the end of that round rather than truly character-by-character; locally
+> (`python app.py`) it streams live.
 
 ## Known limitations (it's a POC)
 
-- Termination is just "max rounds", not true convergence detection.
-- No tools / web access yet, so personas can hallucinate facts.
-- Long meetings grow the context window (no summarization mid-meeting yet).
-- Bidding uses the same model; a cheaper model could be used for bids to save cost.
+- Consensus is judged by an LLM, not a formal vote — it can be optimistic.
+- Search uses DuckDuckGo HTML scraping (no key, but can rate-limit).
+- Long meetings grow the context window (no mid-meeting summarization yet).

@@ -1,23 +1,23 @@
-"""Persona definitions for the consultation room.
+"""Persona definitions and prompt builders for the consultation room.
 
 Each persona is one chatbot "sitting" in the room. The `system` text defines
-its role, expertise and personality. The shared `HOUSE_RULES` are appended to
-every persona so the whole room behaves like a real, challenging discussion
-instead of a chorus of agreement.
+its role, expertise and personality. The shared `HOUSE_RULES` make the room
+behave like a real, challenging discussion that still converges on a decision.
 """
 
-# Rules injected into every participant. This is the main defence against the
-# "AI just agrees with whoever spoke last" problem.
+# Injected into every participant. This is the main lever for behaviour:
+# challenge hard early, but actually move toward agreement so the room can stop.
 HOUSE_RULES = """
-You are in a live meeting with other experts. Behave like a sharp human in a
-real debate:
+You are in a live meeting with other experts. Behave like a sharp human:
 - Be concise: 2-4 sentences. No essays.
-- React to SPECIFIC points other people made (quote or name them).
-- Do NOT agree just to be polite. Before endorsing an idea, raise at least one
+- React to SPECIFIC points other people made (name them).
+- Don't agree just to be polite. Before endorsing an idea, raise at least one
   concrete objection, risk, or missing consideration.
-- If you change your mind, say why explicitly.
-- Don't repeat points that were already made. Add something new or push back.
-- Stay in character. Speak in the first person. Never narrate stage directions.
+- BUT work toward a decision. Once your concerns are genuinely addressed, say so
+  explicitly and move to agreement. Do not argue in circles forever.
+- Don't repeat points already made. Add something new or push back.
+- If search results are provided, ground your point in them.
+- Stay in character. Speak in the first person. No stage directions.
 """
 
 PERSONAS = [
@@ -29,8 +29,7 @@ PERSONAS = [
         "system": (
             "You are Maya, a pragmatic product lead. You care about real user "
             "value, scope, and whether something can actually ship. You cut "
-            "through hype and ask 'who is this for and what problem does it "
-            "solve?' You are skeptical of complexity that doesn't earn its keep."
+            "through hype and ask 'who is this for and what problem does it solve?'"
         ),
     },
     {
@@ -39,11 +38,9 @@ PERSONAS = [
         "role": "Skeptical Engineer (devil's advocate)",
         "color": "#dc2626",
         "system": (
-            "You are Karim, a senior engineer and the room's designated "
-            "devil's advocate. Your job is to attack any forming consensus, "
-            "surface technical risks, edge cases, failure modes and hidden "
-            "costs. You are blunt but fair. You never let a happy agreement "
-            "pass without stress-testing it."
+            "You are Karim, a senior engineer and the room's devil's advocate. "
+            "You attack forming consensus, surface technical risks, edge cases, "
+            "failure modes and hidden costs. Blunt but fair."
         ),
     },
     {
@@ -53,9 +50,8 @@ PERSONAS = [
         "color": "#7c3aed",
         "system": (
             "You are Lina, a bold product visionary. You push for ambitious, "
-            "differentiated ideas and challenge the group when it plays it "
-            "too safe. You back your vision with concrete examples, not just "
-            "enthusiasm."
+            "differentiated ideas and challenge the group when it plays it too "
+            "safe. You back vision with concrete examples, not just enthusiasm."
         ),
     },
     {
@@ -64,42 +60,38 @@ PERSONAS = [
         "role": "Data & Cost-minded Analyst",
         "color": "#059669",
         "system": (
-            "You are Omar, an analyst who thinks in numbers, evidence, cost "
-            "and metrics. You ask 'how would we measure this?' and 'what does "
-            "it cost in time, money, and tokens?'. You distrust claims that "
-            "aren't grounded in data."
+            "You are Omar, an analyst who thinks in numbers, evidence, cost and "
+            "metrics. You ask 'how would we measure this?' and 'what does it "
+            "cost?'. You distrust claims that aren't grounded in data, and you "
+            "like to look things up."
         ),
     },
 ]
 
-# The facilitator only summarises and forces a decision at the end. It is not a
-# regular participant in the back-and-forth.
-FACILITATOR = {
-    "id": "facilitator",
-    "name": "Facilitator",
-    "role": "Neutral Facilitator",
-    "color": "#475569",
-    "system": (
-        "You are a neutral meeting facilitator. You do not take sides. You "
-        "synthesize what the group discussed and drive it to a clear outcome."
-    ),
-}
+FACILITATOR_SYSTEM = (
+    "You are a neutral meeting facilitator. You take no side. You judge the "
+    "state of the discussion honestly and synthesize outcomes."
+)
 
 
-def build_speak_messages(persona, topic, details, transcript):
-    """Messages sent to OpenRouter when it's this persona's turn to speak.
-
-    The whole meeting log is rendered into a single user message. From this
-    persona's point of view everyone else is the 'user' talking to it, which is
-    exactly the effect we want.
-    """
+def build_speak_messages(persona, topic, details, transcript, round_no, total, research=None):
+    """Messages sent when it's this persona's turn to speak."""
     system = f"{persona['system']}\n{HOUSE_RULES}"
     log = transcript or "(The meeting just started. No one has spoken yet.)"
+    research_block = ""
+    if research and research.get("results"):
+        joined = "\n".join(f"- {r}" for r in research["results"])
+        research_block = (
+            f"\n\nYou searched the web for \"{research['query']}\" and found:\n"
+            f"{joined}\nUse these facts where relevant.\n"
+        )
     user = (
         f"MEETING TOPIC: {topic}\n"
         f"DETAILS: {details or '(none provided)'}\n\n"
         f"PARTICIPANTS: {', '.join(p['name'] + ' — ' + p['role'] for p in PERSONAS)}\n\n"
         f"MEETING SO FAR:\n{log}\n\n"
+        f"This is round {round_no} of at most {total}. If your concerns are "
+        f"addressed, move toward a decision.{research_block}\n"
         f"It is now your turn, {persona['name']}. Respond in character."
     )
     return [
@@ -109,41 +101,59 @@ def build_speak_messages(persona, topic, details, transcript):
 
 
 def build_bid_messages(persona, topic, details, transcript):
-    """Messages for the 'do you want to raise your hand?' bidding phase."""
-    system = (
-        f"{persona['system']}\nYou are deciding whether to speak next in a meeting."
-    )
+    """The 'do you want to raise your hand?' bidding phase."""
+    system = f"{persona['system']}\nYou are deciding whether to speak next."
     log = transcript or "(The meeting just started.)"
     user = (
-        f"MEETING TOPIC: {topic}\n"
-        f"DETAILS: {details or '(none)'}\n\n"
+        f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
         f"MEETING SO FAR:\n{log}\n\n"
         f"How urgently do you, {persona['name']}, need to speak right now? "
-        f"Consider whether you have a NEW point, a strong objection, or a direct "
-        f"response to something just said. If you'd only repeat others, score low.\n"
-        f"Reply on ONE line, EXACTLY in this format:\n"
-        f"URGENCY: <integer 0-10> | REASON: <max 12 words>"
+        f"Score high only if you have a NEW point, a strong objection, or a "
+        f"direct response. If you'd only repeat others, score low.\n"
+        f"Reply on ONE line, EXACTLY: URGENCY: <integer 0-10> | REASON: <max 12 words>"
     )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_research_messages(persona, topic, details, transcript):
+    """Lets a persona use the search tool before speaking."""
+    system = f"{persona['system']}\nYou can search the web before you speak."
+    log = transcript or "(The meeting just started.)"
+    user = (
+        f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
+        f"MEETING SO FAR:\n{log}\n\n"
+        f"Before you speak, would a quick web search for a fact, statistic, "
+        f"definition or current info make your point stronger? If yes, reply "
+        f"with exactly: QUERY: <your search query>. If you don't need to search, "
+        f"reply with exactly: NONE."
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_consensus_messages(topic, details, transcript):
+    """Facilitator judges whether the room has actually converged."""
+    user = (
+        f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
+        f"TRANSCRIPT:\n{transcript}\n\n"
+        f"Has the group converged on a single, clear, shared decision that the "
+        f"key participants now agree on? Say YES only if the most recent messages "
+        f"show genuine agreement with no major unresolved objections. If they are "
+        f"still debating, say NO.\n"
+        f"Reply EXACTLY: CONSENSUS: YES|NO | REASON: <max 15 words>"
+    )
+    return [{"role": "system", "content": FACILITATOR_SYSTEM}, {"role": "user", "content": user}]
 
 
 def build_decision_messages(topic, details, transcript):
-    """Final synthesis: agreements, disagreements, and a concrete decision."""
+    """Final synthesis when the room stops."""
     user = (
-        f"MEETING TOPIC: {topic}\n"
-        f"DETAILS: {details or '(none)'}\n\n"
+        f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
         f"FULL TRANSCRIPT:\n{transcript}\n\n"
-        f"As the neutral facilitator, write a short closing summary with these "
-        f"sections, using these exact headers:\n"
+        f"As the neutral facilitator, write a short closing summary using these "
+        f"exact headers:\n"
         f"POINTS OF AGREEMENT:\n- ...\n"
         f"UNRESOLVED DISAGREEMENTS:\n- ...\n"
         f"DECISION / RECOMMENDATION:\n- ...\n"
         f"Be specific and decisive. Do not invent agreement that wasn't there."
     )
-    return [
-        {"role": "system", "content": FACILITATOR["system"]},
-        {"role": "user", "content": user},
-    ]
+    return [{"role": "system", "content": FACILITATOR_SYSTEM}, {"role": "user", "content": user}]

@@ -1,4 +1,14 @@
-"""FastAPI web layer: serves the UI and streams the meeting over SSE."""
+"""FastAPI web layer.
+
+Two short, serverless-friendly endpoints stream one unit of work each:
+  POST /api/step      -> runs a single round
+  POST /api/decision  -> streams the closing decision
+The browser holds the transcript and drives the loop until consensus or the
+round cap, which keeps every request short enough for Vercel.
+
+The OpenRouter API key is taken from the `X-OpenRouter-Key` header (sent by the
+UI) or, as a fallback, the OPENROUTER_API_KEY env var. We never store it.
+"""
 
 import json
 import os
@@ -7,12 +17,11 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
-from room import run_room
+from room import run_step, run_decision
 
 load_dotenv()
 
 app = FastAPI(title="AI Consultation Rooms")
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -25,23 +34,54 @@ def _sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@app.get("/api/stream")
-async def stream(request: Request, topic: str, details: str = "", rounds: int = 8):
-    rounds = max(1, min(20, rounds))
-
+def _stream_response(gen_factory, request):
     async def gen():
         try:
-            async for event, data in run_room(topic, details, rounds):
+            async for event, data in gen_factory():
                 if await request.is_disconnected():
                     break
                 yield _sse(event, data)
-        except Exception as e:  # surface setup errors (e.g. missing API key) to the UI
+        except Exception as e:
             yield _sse("error", {"message": str(e)})
 
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/step")
+async def step(request: Request):
+    body = await request.json()
+    key = request.headers.get("X-OpenRouter-Key")
+    return _stream_response(
+        lambda: run_step(
+            topic=body.get("topic", ""),
+            details=body.get("details", ""),
+            history=body.get("history", []),
+            round_no=int(body.get("round", 1)),
+            total=int(body.get("total", 8)),
+            key=key,
+            model=body.get("model"),
+        ),
+        request,
+    )
+
+
+@app.post("/api/decision")
+async def decision(request: Request):
+    body = await request.json()
+    key = request.headers.get("X-OpenRouter-Key")
+    return _stream_response(
+        lambda: run_decision(
+            topic=body.get("topic", ""),
+            details=body.get("details", ""),
+            history=body.get("history", []),
+            key=key,
+            model=body.get("model"),
+        ),
+        request,
     )
 
 
