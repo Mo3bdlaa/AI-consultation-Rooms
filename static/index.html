@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Consultation Rooms</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --panel2:#334155; --text:#e2e8f0; --muted:#94a3b8; }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); height:100vh; display:flex; flex-direction:column;
+  }
+  header { padding:14px 20px; background:var(--panel); border-bottom:1px solid var(--panel2); }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  .setup { padding:16px 20px; background:var(--panel); border-bottom:1px solid var(--panel2);
+           display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .setup label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:4px; }
+  .setup input { background:var(--bg); border:1px solid var(--panel2); color:var(--text);
+                 padding:8px 10px; border-radius:8px; font-size:14px; }
+  #topic { width:280px; } #details { width:360px; } #rounds { width:70px; }
+  button { background:#2563eb; color:#fff; border:0; padding:10px 18px; border-radius:8px;
+           font-size:14px; cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .main { flex:1; display:flex; min-height:0; }
+  .chat { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
+  .side { width:280px; border-left:1px solid var(--panel2); background:var(--panel); padding:16px;
+          overflow-y:auto; }
+  .side h3 { margin:0 0 10px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .msg { display:flex; gap:10px; max-width:80%; }
+  .avatar { width:34px; height:34px; border-radius:50%; flex-shrink:0; display:flex;
+            align-items:center; justify-content:center; font-weight:700; color:#fff; font-size:14px; }
+  .bubble { background:var(--panel); border-radius:12px; padding:10px 14px; }
+  .bubble .who { font-size:12px; font-weight:700; margin-bottom:3px; }
+  .bubble .who span { color:var(--muted); font-weight:400; }
+  .bubble .body { font-size:14px; line-height:1.5; white-space:pre-wrap; }
+  .system { align-self:center; color:var(--muted); font-size:12px; background:var(--panel2);
+            padding:5px 12px; border-radius:20px; }
+  .bid { margin-bottom:10px; }
+  .bid .row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; }
+  .bid .reason { font-size:11px; color:var(--muted); }
+  .bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
+  .bar > div { height:100%; transition:width .3s; }
+  .bid.winner { outline:2px solid #fbbf24; border-radius:8px; padding:6px; margin:-6px -6px 10px; }
+  .decision { align-self:stretch; background:#0c4a6e; border:1px solid #0ea5e9; border-radius:12px;
+              padding:16px; white-space:pre-wrap; font-size:14px; line-height:1.6; }
+  .decision h2 { margin:0 0 8px; font-size:15px; }
+  .typing { display:inline-block; width:8px; height:14px; background:var(--text); margin-left:2px;
+            animation:blink 1s steps(2) infinite; vertical-align:middle; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🪑 AI Consultation Rooms</h1>
+    <p>Personas debate your topic, challenge each other, and reach a decision. Watch who "raises a hand" each round.</p>
+  </header>
+
+  <div class="setup">
+    <label>Topic
+      <input id="topic" placeholder="e.g. Should we build a mobile app or a web app first?" />
+    </label>
+    <label>Details (optional)
+      <input id="details" placeholder="Context, constraints, goals..." />
+    </label>
+    <label>Rounds
+      <input id="rounds" type="number" value="6" min="1" max="20" />
+    </label>
+    <button id="start">Start meeting</button>
+  </div>
+
+  <div class="main">
+    <div class="chat" id="chat"></div>
+    <div class="side">
+      <h3>🙋 Raised hands (this round)</h3>
+      <div id="bids"></div>
+    </div>
+  </div>
+
+<script>
+const chat = document.getElementById('chat');
+const bidsEl = document.getElementById('bids');
+const startBtn = document.getElementById('start');
+let participants = {};
+let evtSource = null;
+let currentBubble = null, currentCursor = null;
+
+function clear() { chat.innerHTML = ''; bidsEl.innerHTML = ''; participants = {}; }
+function scroll() { chat.scrollTop = chat.scrollHeight; }
+
+function sys(text) {
+  const d = document.createElement('div');
+  d.className = 'system'; d.textContent = text; chat.appendChild(d); scroll();
+}
+
+function startBubble(p) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg';
+  const av = document.createElement('div');
+  av.className = 'avatar'; av.style.background = p.color; av.textContent = p.name[0];
+  const bub = document.createElement('div');
+  bub.className = 'bubble';
+  bub.innerHTML = `<div class="who" style="color:${p.color}">${p.name} <span>· ${p.role}</span></div>`;
+  const body = document.createElement('div'); body.className = 'body';
+  const cursor = document.createElement('span'); cursor.className = 'typing';
+  body.appendChild(cursor);
+  bub.appendChild(body);
+  wrap.appendChild(av); wrap.appendChild(bub);
+  chat.appendChild(wrap); scroll();
+  currentBubble = body; currentCursor = cursor;
+}
+
+function appendToken(text) {
+  if (!currentBubble) return;
+  currentCursor.insertAdjacentText('beforebegin', text);
+  scroll();
+}
+
+function endBubble() {
+  if (currentCursor) currentCursor.remove();
+  currentBubble = null; currentCursor = null;
+}
+
+function renderBids(bids) {
+  bidsEl.innerHTML = '';
+  const sorted = [...bids].sort((a,b) => b.effective - a.effective);
+  const winnerId = sorted[0].id;
+  sorted.forEach(b => {
+    const d = document.createElement('div');
+    d.className = 'bid' + (b.id === winnerId ? ' winner' : '');
+    d.innerHTML = `
+      <div class="row"><span style="color:${b.color};font-weight:600">${b.name}</span>
+        <span>${b.urgency}/10</span></div>
+      <div class="bar"><div style="width:${b.urgency*10}%;background:${b.color}"></div></div>
+      <div class="reason">${b.reason || ''}</div>`;
+    bidsEl.appendChild(d);
+  });
+}
+
+function decision(text) {
+  const d = document.createElement('div');
+  d.className = 'decision';
+  d.innerHTML = '<h2>✅ Facilitator decision</h2>' + text.replace(/</g,'&lt;');
+  chat.appendChild(d); scroll();
+}
+
+startBtn.onclick = () => {
+  const topic = document.getElementById('topic').value.trim();
+  if (!topic) { alert('Enter a topic first'); return; }
+  const details = document.getElementById('details').value.trim();
+  const rounds = document.getElementById('rounds').value || 6;
+  if (evtSource) evtSource.close();
+  clear();
+  startBtn.disabled = true; startBtn.textContent = 'Meeting in progress…';
+
+  const q = new URLSearchParams({ topic, details, rounds });
+  evtSource = new EventSource('/api/stream?' + q.toString());
+
+  evtSource.addEventListener('start', e => {
+    const d = JSON.parse(e.data);
+    d.participants.forEach(p => participants[p.id] = p);
+    sys('Meeting started · ' + d.participants.map(p=>p.name).join(', '));
+  });
+  evtSource.addEventListener('round', e => {
+    const d = JSON.parse(e.data); sys(`— Round ${d.n} of ${d.total} —`);
+  });
+  evtSource.addEventListener('bids', e => renderBids(JSON.parse(e.data).bids));
+  evtSource.addEventListener('turn_start', e => startBubble(JSON.parse(e.data)));
+  evtSource.addEventListener('token', e => appendToken(JSON.parse(e.data).text));
+  evtSource.addEventListener('turn_end', () => endBubble());
+  evtSource.addEventListener('deciding', () => sys('Facilitator is summarizing…'));
+  evtSource.addEventListener('decision', e => decision(JSON.parse(e.data).text));
+  evtSource.addEventListener('done', () => {
+    sys('Meeting ended.'); finish();
+  });
+  evtSource.addEventListener('error', e => {
+    let msg = 'Connection error.';
+    try { msg = JSON.parse(e.data).message; } catch(_) {}
+    sys('⚠️ ' + msg); finish();
+  });
+};
+
+function finish() {
+  if (evtSource) evtSource.close();
+  startBtn.disabled = false; startBtn.textContent = 'Start meeting';
+}
+</script>
+</body>
+</html>
