@@ -51,10 +51,15 @@ server-side. You can also set `OPENROUTER_API_KEY` in a `.env` file instead.
 Defaults to a **free** model: `meta-llama/llama-3.3-70b-instruct:free`. Change it
 with `OPENROUTER_MODEL` in `.env`, or list more at <https://openrouter.ai/models>.
 
-Calls per round = **4 bids + 1 research + 1 speak + 1 consensus = ~7**, plus 1
-for the final decision. A meeting that converges in ~5 rounds ≈ **36 requests**.
-With the 1000 requests/day free tier that's ~25 meetings/day. To use less: lower
-the round cap, or set `ENABLE_SEARCH = False` in `room.py`.
+Calls per round = **1 organizer (scores everyone) + 1 research + 1 speak + 1
+consensus = ~4**, plus 1 for the final decision. A meeting that converges in ~5
+rounds ≈ **21 requests**. Calls are made **sequentially** (no parallel bursts)
+and **retry with backoff on 429**, which keeps it within free-tier limits. To
+use even less: lower the round cap, or set `ENABLE_SEARCH = False` in `room.py`.
+
+> Free OpenRouter models are rate-limited per minute and per day. If you still
+> see a 429, wait ~30–60s, lower the round count, or switch `OPENROUTER_MODEL`
+> to a paid model.
 
 ## Deploy to Vercel
 

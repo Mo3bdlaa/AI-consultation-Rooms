@@ -21,7 +21,7 @@ import httpx
 from personas import (
     PERSONAS,
     build_speak_messages,
-    build_bid_messages,
+    build_moderator_messages,
     build_research_messages,
     build_consensus_messages,
     build_decision_messages,
@@ -31,8 +31,9 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
 ENABLE_SEARCH = True
+_RETRYABLE = {429, 500, 502, 503, 529}
+_MAX_RETRIES = 4
 
-_BID_RE = re.compile(r"URGENCY:\s*(\d+).*?REASON:\s*(.*)", re.IGNORECASE | re.DOTALL)
 _CONSENSUS_RE = re.compile(r"CONSENSUS:\s*(YES|NO).*?REASON:\s*(.*)", re.IGNORECASE | re.DOTALL)
 
 
@@ -58,11 +59,40 @@ def _headers(key):
     }
 
 
+def _friendly_error(e):
+    msg = str(e)
+    if "429" in msg:
+        return (
+            "OpenRouter rate-limited you (429), even after retries. Free models "
+            "have tight per-minute/daily limits. Wait ~30–60s and try again, lower "
+            "the max rounds, or add credits / pick a paid model in OPENROUTER_MODEL."
+        )
+    if "401" in msg or "403" in msg:
+        return "OpenRouter rejected the API key (401/403). Check the key you pasted."
+    return f"Model call failed: {msg}"
+
+
+def _backoff(resp, attempt):
+    """Seconds to wait before retrying. Honors Retry-After when present."""
+    if resp is not None:
+        ra = resp.headers.get("Retry-After")
+        if ra:
+            try:
+                return min(20, float(ra))
+            except ValueError:
+                pass
+    return min(16, 2 ** (attempt + 1))  # 2, 4, 8, 16
+
+
 async def _complete(client, key, model, messages, max_tokens=400, temperature=0.8):
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
-    resp = await client.post(OPENROUTER_URL, headers=_headers(key), json=body, timeout=60)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    for attempt in range(_MAX_RETRIES + 1):
+        resp = await client.post(OPENROUTER_URL, headers=_headers(key), json=body, timeout=60)
+        if resp.status_code in _RETRYABLE and attempt < _MAX_RETRIES:
+            await asyncio.sleep(_backoff(resp, attempt))
+            continue
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 async def _stream(client, key, model, messages, max_tokens=400, temperature=0.85):
@@ -70,20 +100,29 @@ async def _stream(client, key, model, messages, max_tokens=400, temperature=0.85
         "model": model, "messages": messages, "max_tokens": max_tokens,
         "temperature": temperature, "stream": True,
     }
-    async with client.stream("POST", OPENROUTER_URL, headers=_headers(key), json=body, timeout=120) as resp:
-        resp.raise_for_status()
-        async for line in resp.aiter_lines():
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[len("data:"):].strip()
-            if payload == "[DONE]":
-                break
-            try:
-                delta = json.loads(payload)["choices"][0]["delta"].get("content")
-                if delta:
-                    yield delta
-            except (json.JSONDecodeError, KeyError, IndexError):
-                continue
+    for attempt in range(_MAX_RETRIES + 1):
+        async with client.stream(
+            "POST", OPENROUTER_URL, headers=_headers(key), json=body, timeout=120
+        ) as resp:
+            if resp.status_code in _RETRYABLE and attempt < _MAX_RETRIES:
+                await resp.aread()
+                wait = _backoff(resp, attempt)
+            else:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:"):].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(payload)["choices"][0]["delta"].get("content")
+                        if delta:
+                            yield delta
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                return
+        await asyncio.sleep(wait)
 
 
 _SNIPPET_RE = re.compile(r'result__snippet[^>]*>(.*?)</a>', re.DOTALL)
@@ -118,18 +157,24 @@ def _render(history):
     return "\n".join(f"[{m['name']}]: {m['text']}" for m in history)
 
 
-async def _get_bid(client, key, model, persona, topic, details, transcript):
+async def _moderator_bids(client, key, model, topic, details, transcript):
+    """One call that scores every participant. Returns {persona_id: (urgency, reason)}."""
+    scores = {}
     try:
         raw = await _complete(
-            client, key, model, build_bid_messages(persona, topic, details, transcript),
-            max_tokens=40, temperature=0.4,
+            client, key, model,
+            build_moderator_messages(topic, details, transcript),
+            max_tokens=160, temperature=0.4,
         )
     except Exception:
-        return 0, "(no response)"
-    m = _BID_RE.search(raw)
-    if not m:
-        return 1, raw[:60]
-    return max(0, min(10, int(m.group(1)))), m.group(2).strip().split("\n")[0][:80]
+        raw = ""
+    for p in PERSONAS:
+        m = re.search(rf"{re.escape(p['name'])}\s*\|\s*(\d+)\s*\|\s*([^\n|]*)", raw, re.IGNORECASE)
+        if m:
+            scores[p["id"]] = (max(0, min(10, int(m.group(1)))), m.group(2).strip()[:80])
+        else:
+            scores[p["id"]] = (5, "")  # neutral fallback so the room keeps moving
+    return scores
 
 
 async def run_step(topic, details, history, round_no, total, key=None, model=None):
@@ -141,12 +186,11 @@ async def run_step(topic, details, history, round_no, total, key=None, model=Non
     transcript = _render(history)
 
     async with httpx.AsyncClient() as client:
-        # 1. Bidding -------------------------------------------------------
-        results = await asyncio.gather(
-            *[_get_bid(client, key, model, p, topic, details, transcript) for p in PERSONAS]
-        )
+        # 1. Bidding: one organizer call scores everyone (no parallel burst) --
+        scores = await _moderator_bids(client, key, model, topic, details, transcript)
         bids = []
-        for p, (urgency, reason) in zip(PERSONAS, results):
+        for p in PERSONAS:
+            urgency, reason = scores[p["id"]]
             effective = urgency - (2 if p["name"] == last_speaker else 0)
             bids.append({
                 "id": p["id"], "name": p["name"], "color": p["color"],
@@ -185,7 +229,7 @@ async def run_step(topic, details, history, round_no, total, key=None, model=Non
                 buffer.append(delta)
                 yield "token", {"id": speaker["id"], "text": delta}
         except Exception as e:
-            yield "error", {"message": f"Model call failed: {e}"}
+            yield "error", {"message": _friendly_error(e)}
             return
         text = "".join(buffer).strip() or "(stayed silent)"
         yield "turn_end", {"id": speaker["id"], "name": speaker["name"], "text": text}
@@ -223,5 +267,5 @@ async def run_decision(topic, details, history, key=None, model=None):
             ):
                 yield "decision_token", {"text": delta}
         except Exception as e:
-            yield "error", {"message": f"Could not generate decision: {e}"}
+            yield "error", {"message": _friendly_error(e)}
     yield "done", {}

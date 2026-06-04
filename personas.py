@@ -100,17 +100,28 @@ def build_speak_messages(persona, topic, details, transcript, round_no, total, r
     ]
 
 
-def build_bid_messages(persona, topic, details, transcript):
-    """The 'do you want to raise your hand?' bidding phase."""
-    system = f"{persona['system']}\nYou are deciding whether to speak next."
-    log = transcript or "(The meeting just started.)"
+def build_moderator_messages(topic, details, transcript):
+    """A single 'meeting organizer' call that scores everyone at once.
+
+    Returns one line per participant so we can render the raised-hands panel
+    without making four separate API calls (which trips free-tier rate limits).
+    """
+    names = ", ".join(p["name"] for p in PERSONAS)
+    roster = "\n".join(f"- {p['name']}: {p['role']}" for p in PERSONAS)
+    log = transcript or "(The meeting just started. No one has spoken yet.)"
+    system = (
+        "You are the meeting organizer. You decide who should speak next based "
+        "on who has the most valuable contribution right now — a new point, a "
+        "strong objection, or a direct response. Don't let one person dominate."
+    )
     user = (
         f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
+        f"PARTICIPANTS:\n{roster}\n\n"
         f"MEETING SO FAR:\n{log}\n\n"
-        f"How urgently do you, {persona['name']}, need to speak right now? "
-        f"Score high only if you have a NEW point, a strong objection, or a "
-        f"direct response. If you'd only repeat others, score low.\n"
-        f"Reply on ONE line, EXACTLY: URGENCY: <integer 0-10> | REASON: <max 12 words>"
+        f"For EACH participant ({names}), rate 0-10 how urgently they should "
+        f"speak next and give a short reason. Output EXACTLY one line per "
+        f"participant in this format (nothing else):\n"
+        f"Name | <0-10> | <reason, max 10 words>"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
