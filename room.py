@@ -85,20 +85,23 @@ def _backoff(resp, attempt):
 
 
 async def _complete(client, key, model, messages, max_tokens=400, temperature=0.8):
-    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+    body = {
+        "model": model, "messages": messages, "max_tokens": max_tokens,
+        "temperature": temperature, "reasoning": {"exclude": True},
+    }
     for attempt in range(_MAX_RETRIES + 1):
         resp = await client.post(OPENROUTER_URL, headers=_headers(key), json=body, timeout=60)
         if resp.status_code in _RETRYABLE and attempt < _MAX_RETRIES:
             await asyncio.sleep(_backoff(resp, attempt))
             continue
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        return _strip_think(resp.json()["choices"][0]["message"]["content"]).strip()
 
 
 async def _stream(client, key, model, messages, max_tokens=400, temperature=0.85):
     body = {
         "model": model, "messages": messages, "max_tokens": max_tokens,
-        "temperature": temperature, "stream": True,
+        "temperature": temperature, "stream": True, "reasoning": {"exclude": True},
     }
     for attempt in range(_MAX_RETRIES + 1):
         async with client.stream(
@@ -157,24 +160,49 @@ def _render(history):
     return "\n".join(f"[{m['name']}]: {m['text']}" for m in history)
 
 
+def _strip_think(text):
+    """Drop reasoning blocks some models leak into content (<think>...</think>)."""
+    if not text:
+        return ""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"</?think>", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+# Find a persona's name, then the first 0-10 score near it, tolerating many
+# formats: "Maya | 7 | ...", "**Maya**: 7 - ...", "Maya - 7/10", "Maya 7".
+def _score_pattern(name):
+    return re.compile(
+        rf"\**{re.escape(name)}\**\s*[\|:\-–>\)]*\s*\(?\s*(10|[0-9])(?!\d)\s*(?:/\s*10)?\s*[\|:\-–\)]*\s*([^\n]*)",
+        re.IGNORECASE,
+    )
+
+
+def _parse_scores(raw):
+    raw = _strip_think(raw)
+    scores = {}
+    for p in PERSONAS:
+        m = _score_pattern(p["name"]).search(raw)
+        if m:
+            urgency = max(0, min(10, int(m.group(1))))
+            reason = m.group(2).strip().strip("|:-–) ").strip()[:80]
+            scores[p["id"]] = (urgency, reason)
+        else:
+            scores[p["id"]] = (5, "")  # neutral fallback so the room keeps moving
+    return scores
+
+
 async def _moderator_bids(client, key, model, topic, details, transcript):
     """One call that scores every participant. Returns {persona_id: (urgency, reason)}."""
-    scores = {}
     try:
         raw = await _complete(
             client, key, model,
             build_moderator_messages(topic, details, transcript),
-            max_tokens=160, temperature=0.4,
+            max_tokens=200, temperature=0.4,
         )
     except Exception:
         raw = ""
-    for p in PERSONAS:
-        m = re.search(rf"{re.escape(p['name'])}\s*\|\s*(\d+)\s*\|\s*([^\n|]*)", raw, re.IGNORECASE)
-        if m:
-            scores[p["id"]] = (max(0, min(10, int(m.group(1)))), m.group(2).strip()[:80])
-        else:
-            scores[p["id"]] = (5, "")  # neutral fallback so the room keeps moving
-    return scores
+    return _parse_scores(raw)
 
 
 async def run_step(topic, details, history, round_no, total, key=None, model=None):

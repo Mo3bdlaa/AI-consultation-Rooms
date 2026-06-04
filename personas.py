@@ -114,14 +114,16 @@ def build_moderator_messages(topic, details, transcript):
         "on who has the most valuable contribution right now — a new point, a "
         "strong objection, or a direct response. Don't let one person dominate."
     )
+    example = "\n".join(f"{p['name']} | 6 | short reason here" for p in PERSONAS)
     user = (
         f"TOPIC: {topic}\nDETAILS: {details or '(none)'}\n\n"
         f"PARTICIPANTS:\n{roster}\n\n"
         f"MEETING SO FAR:\n{log}\n\n"
         f"For EACH participant ({names}), rate 0-10 how urgently they should "
-        f"speak next and give a short reason. Output EXACTLY one line per "
-        f"participant in this format (nothing else):\n"
-        f"Name | <0-10> | <reason, max 10 words>"
+        f"speak next, with a short reason. Use DIFFERENT scores — do not give "
+        f"everyone the same number.\n"
+        f"Output ONLY these {len(PERSONAS)} lines, nothing before or after, in "
+        f"this EXACT format:\n{example}"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
