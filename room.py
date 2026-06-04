@@ -28,7 +28,7 @@ from personas import (
 )
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+DEFAULT_MODEL = "z-ai/glm-4.5-air:free"
 
 ENABLE_SEARCH = True
 _RETRYABLE = {429, 500, 502, 503, 529}

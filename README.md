@@ -48,7 +48,7 @@ server-side. You can also set `OPENROUTER_API_KEY` in a `.env` file instead.
 
 ## Model & cost
 
-Defaults to a **free** model: `meta-llama/llama-3.3-70b-instruct:free`. Change it
+Defaults to a **free** model: `z-ai/glm-4.5-air:free`. Change it
 with `OPENROUTER_MODEL` in `.env`, or list more at <https://openrouter.ai/models>.
 
 Calls per round = **1 organizer (scores everyone) + 1 research + 1 speak + 1
