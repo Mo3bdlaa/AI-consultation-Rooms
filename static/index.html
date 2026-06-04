@@ -48,6 +48,27 @@
   .typing { display:inline-block; width:8px; height:14px; background:var(--text); margin-left:2px;
             animation:blink 1s steps(2) infinite; vertical-align:middle; }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* --- Mobile: stack the panels instead of placing them side-by-side --- */
+  @media (max-width: 760px) {
+    header p { font-size:12px; }
+    .setup { padding:12px; gap:8px; }
+    .setup label { width:100%; }
+    .setup input,
+    #topic, #details, #rounds, #key { width:100%; }
+    .setup button { width:100%; padding:12px; }
+    .main { flex-direction:column; }
+    .side {
+      order:-1;              /* raised hands above the chat */
+      width:auto;
+      border-left:none;
+      border-bottom:1px solid var(--panel2);
+      max-height:32vh;
+      padding:12px 14px;
+    }
+    .chat { padding:14px; }
+    .msg { max-width:100%; }
+  }
 </style>
 </head>
 <body>
