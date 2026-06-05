@@ -101,10 +101,8 @@ def build_speak_messages(persona, topic, details, transcript, round_no, total, r
 
 
 def build_moderator_messages(topic, details, transcript):
-    """A single 'meeting organizer' call that scores everyone at once.
-
-    Returns one line per participant so we can render the raised-hands panel
-    without making four separate API calls (which trips free-tier rate limits).
+    """A single 'meeting organizer' call that both scores everyone AND judges
+    whether the room has reached consensus — one call instead of two.
     """
     names = ", ".join(p["name"] for p in PERSONAS)
     roster = "\n".join(f"- {p['name']}: {p['role']}" for p in PERSONAS)
@@ -112,7 +110,8 @@ def build_moderator_messages(topic, details, transcript):
     system = (
         "You are the meeting organizer. You decide who should speak next based "
         "on who has the most valuable contribution right now — a new point, a "
-        "strong objection, or a direct response. Don't let one person dominate."
+        "strong objection, or a direct response. Don't let one person dominate. "
+        "You also judge whether the group has genuinely converged on a decision."
     )
     example = "\n".join(f"{p['name']} | 6 | short reason here" for p in PERSONAS)
     user = (
@@ -121,9 +120,11 @@ def build_moderator_messages(topic, details, transcript):
         f"MEETING SO FAR:\n{log}\n\n"
         f"For EACH participant ({names}), rate 0-10 how urgently they should "
         f"speak next, with a short reason. Use DIFFERENT scores — do not give "
-        f"everyone the same number.\n"
-        f"Output ONLY these {len(PERSONAS)} lines, nothing before or after, in "
-        f"this EXACT format:\n{example}"
+        f"everyone the same number. Then add a final CONSENSUS line: YES only if "
+        f"the group genuinely agrees on a clear decision with no major unresolved "
+        f"objections, otherwise NO.\n"
+        f"Output ONLY these lines, nothing before or after, in this EXACT format:\n"
+        f"{example}\nCONSENSUS | NO | short reason"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

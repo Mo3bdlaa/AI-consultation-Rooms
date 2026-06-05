@@ -1,14 +1,12 @@
-"""Consultation room orchestrator.
+"""Model I/O and per-round logic for the consultation room.
 
-Designed to be *stateless per round* so it runs on serverless (Vercel): the
-browser holds the transcript and calls `/api/step` once per round, then
-`/api/decision` at the end. Each call is short.
+This module only knows how to talk to OpenRouter and turn one round of a meeting
+into events. The long-running meeting loop and its state live in `meetings.py`.
 
-Every round:
-  1. Bidding   - all personas score how urgently they want to speak (parallel)
-  2. Research  - the chosen speaker may use the web-search tool
+Each round:
+  1. Organizer - one call scores every persona AND judges consensus
+  2. Research  - (optional) the chosen speaker uses the web-search tool
   3. Speaking  - the chosen speaker's reply is streamed token-by-token
-  4. Consensus - the facilitator judges whether the room has converged
 """
 
 import os
@@ -23,18 +21,15 @@ from personas import (
     build_speak_messages,
     build_moderator_messages,
     build_research_messages,
-    build_consensus_messages,
     build_decision_messages,
 )
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "z-ai/glm-4.5-air:free"
+# Fast, non-reasoning, free model that reliably follows the output format.
+DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
-ENABLE_SEARCH = True
 _RETRYABLE = {429, 500, 502, 503, 529}
 _MAX_RETRIES = 4
-
-_CONSENSUS_RE = re.compile(r"CONSENSUS:\s*(YES|NO).*?REASON:\s*(.*)", re.IGNORECASE | re.DOTALL)
 
 
 def resolve_model(model):
@@ -45,7 +40,7 @@ def resolve_key(key):
     key = (key or os.environ.get("OPENROUTER_API_KEY") or "").strip()
     if not key:
         raise RuntimeError(
-            "No OpenRouter API key. Paste your key in the field at the top "
+            "No OpenRouter API key. Open Settings and paste your key "
             "(get one free at openrouter.ai/keys)."
         )
     return key
@@ -59,16 +54,16 @@ def _headers(key):
     }
 
 
-def _friendly_error(e):
+def friendly_error(e):
     msg = str(e)
     if "429" in msg:
         return (
             "OpenRouter rate-limited you (429), even after retries. Free models "
             "have tight per-minute/daily limits. Wait ~30–60s and try again, lower "
-            "the max rounds, or add credits / pick a paid model in OPENROUTER_MODEL."
+            "the rounds, or pick a paid model in Settings."
         )
     if "401" in msg or "403" in msg:
-        return "OpenRouter rejected the API key (401/403). Check the key you pasted."
+        return "OpenRouter rejected the API key (401/403). Check the key in Settings."
     return f"Model call failed: {msg}"
 
 
@@ -98,7 +93,8 @@ async def _complete(client, key, model, messages, max_tokens=400, temperature=0.
         return _strip_think(resp.json()["choices"][0]["message"]["content"]).strip()
 
 
-async def _stream(client, key, model, messages, max_tokens=400, temperature=0.85):
+async def stream_completion(client, key, model, messages, max_tokens=400, temperature=0.85):
+    """Yield content chunks from a streaming completion (retries on 429/5xx)."""
     body = {
         "model": model, "messages": messages, "max_tokens": max_tokens,
         "temperature": temperature, "stream": True, "reasoning": {"exclude": True},
@@ -128,6 +124,7 @@ async def _stream(client, key, model, messages, max_tokens=400, temperature=0.85
         await asyncio.sleep(wait)
 
 
+# --- Web search tool --------------------------------------------------------
 _SNIPPET_RE = re.compile(r'result__snippet[^>]*>(.*?)</a>', re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 _SEARCH_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -135,9 +132,7 @@ _SEARCH_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 def _clean_html(s):
     import html as _html
-    s = _TAG_RE.sub("", s)
-    s = _html.unescape(s)
-    return re.sub(r"\s+", " ", s).strip()
+    return re.sub(r"\s+", " ", _html.unescape(_TAG_RE.sub("", s))).strip()
 
 
 async def web_search(client, query, max_results=4):
@@ -145,10 +140,7 @@ async def web_search(client, query, max_results=4):
     try:
         r = await client.post(
             "https://html.duckduckgo.com/html/",
-            data={"q": query},
-            headers=_SEARCH_HEADERS,
-            timeout=20,
-            follow_redirects=True,
+            data={"q": query}, headers=_SEARCH_HEADERS, timeout=20, follow_redirects=True,
         )
         snippets = [_clean_html(s) for s in _SNIPPET_RE.findall(r.text)]
         return [s for s in snippets if s][:max_results]
@@ -156,7 +148,8 @@ async def web_search(client, query, max_results=4):
         return []
 
 
-def _render(history):
+# --- Parsing helpers --------------------------------------------------------
+def render_transcript(history):
     return "\n".join(f"[{m['name']}]: {m['text']}" for m in history)
 
 
@@ -169,131 +162,66 @@ def _strip_think(text):
     return text.strip()
 
 
-# Find a persona's name, then the first 0-10 score near it, tolerating many
-# formats: "Maya | 7 | ...", "**Maya**: 7 - ...", "Maya - 7/10", "Maya 7".
 def _score_pattern(name):
+    # name, then the first 0-10 near it; tolerates | : - /10 markdown bold etc.
     return re.compile(
         rf"\**{re.escape(name)}\**\s*[\|:\-–>\)]*\s*\(?\s*(10|[0-9])(?!\d)\s*(?:/\s*10)?\s*[\|:\-–\)]*\s*([^\n]*)",
         re.IGNORECASE,
     )
 
 
-def _parse_scores(raw):
+_CONSENSUS_RE = re.compile(r"CONSENSUS\s*[\|:\-–]\s*(YES|NO)\s*[\|:\-–]?\s*([^\n]*)", re.IGNORECASE)
+
+
+def parse_moderator(raw):
+    """Returns (scores: {id:(urgency,reason)}, matched:int, consensus:bool, reason:str)."""
     raw = _strip_think(raw)
-    scores = {}
+    scores, matched = {}, 0
     for p in PERSONAS:
         m = _score_pattern(p["name"]).search(raw)
         if m:
+            matched += 1
             urgency = max(0, min(10, int(m.group(1))))
             reason = m.group(2).strip().strip("|:-–) ").strip()[:80]
             scores[p["id"]] = (urgency, reason)
         else:
-            scores[p["id"]] = (5, "")  # neutral fallback so the room keeps moving
-    return scores
+            scores[p["id"]] = (5, "")
+    cm = _CONSENSUS_RE.search(raw)
+    consensus = bool(cm and cm.group(1).upper() == "YES")
+    creason = cm.group(2).strip()[:100] if cm else ""
+    return scores, matched, consensus, creason
 
 
-async def _moderator_bids(client, key, model, topic, details, transcript):
-    """One call that scores every participant. Returns {persona_id: (urgency, reason)}."""
+async def organizer(client, key, model, topic, details, transcript):
+    """One call: scores everyone + consensus verdict."""
     try:
         raw = await _complete(
-            client, key, model,
-            build_moderator_messages(topic, details, transcript),
-            max_tokens=200, temperature=0.4,
+            client, key, model, build_moderator_messages(topic, details, transcript),
+            max_tokens=220, temperature=0.5,
         )
     except Exception:
         raw = ""
-    return _parse_scores(raw)
+    return parse_moderator(raw)
 
 
-async def run_step(topic, details, history, round_no, total, key=None, model=None):
-    """One round. Yields (event, data). Caller appends turn_end text to history."""
-    key = resolve_key(key)
-    model = resolve_model(model)
-    history = history or []
-    last_speaker = history[-1]["name"] if history else None
-    transcript = _render(history)
-
-    async with httpx.AsyncClient() as client:
-        # 1. Bidding: one organizer call scores everyone (no parallel burst) --
-        scores = await _moderator_bids(client, key, model, topic, details, transcript)
-        bids = []
-        for p in PERSONAS:
-            urgency, reason = scores[p["id"]]
-            effective = urgency - (2 if p["name"] == last_speaker else 0)
-            bids.append({
-                "id": p["id"], "name": p["name"], "color": p["color"],
-                "urgency": urgency, "effective": effective, "reason": reason,
-            })
-        yield "bids", {"bids": bids}
-
-        speaker = next(p for p in PERSONAS if p["id"] == max(bids, key=lambda b: b["effective"])["id"])
-        yield "turn_start", {"id": speaker["id"], "name": speaker["name"],
-                             "role": speaker["role"], "color": speaker["color"]}
-
-        # 2. Research (optional tool use) ---------------------------------
-        research = None
-        if ENABLE_SEARCH:
-            try:
-                decision = await _complete(
-                    client, key, model,
-                    build_research_messages(speaker, topic, details, transcript),
-                    max_tokens=40, temperature=0.3,
-                )
-            except Exception:
-                decision = "NONE"
-            q = decision.strip()
-            if q.upper().startswith("QUERY:"):
-                query = q.split(":", 1)[1].strip()[:120]
-                yield "searching", {"id": speaker["id"], "query": query}
-                hits = await web_search(client, query)
-                research = {"query": query, "results": hits}
-                yield "search_results", {"id": speaker["id"], "query": query, "results": hits}
-
-        # 3. Speaking (streamed) ------------------------------------------
-        messages = build_speak_messages(speaker, topic, details, transcript, round_no, total, research)
-        buffer = []
-        try:
-            async for delta in _stream(client, key, model, messages):
-                buffer.append(delta)
-                yield "token", {"id": speaker["id"], "text": delta}
-        except Exception as e:
-            yield "error", {"message": _friendly_error(e)}
-            return
-        text = "".join(buffer).strip() or "(stayed silent)"
-        yield "turn_end", {"id": speaker["id"], "name": speaker["name"], "text": text}
-
-        # 4. Consensus check ----------------------------------------------
-        # Don't bother checking until the room has had a real exchange.
-        consensus, reason = False, ""
-        if len(history) + 1 >= 3:
-            new_transcript = transcript + f"\n[{speaker['name']}]: {text}"
-            try:
-                raw = await _complete(
-                    client, key, model,
-                    build_consensus_messages(topic, details, new_transcript),
-                    max_tokens=40, temperature=0.0,
-                )
-                m = _CONSENSUS_RE.search(raw)
-                if m:
-                    consensus = m.group(1).upper() == "YES"
-                    reason = m.group(2).strip().split("\n")[0][:100]
-            except Exception:
-                pass
-        yield "verdict", {"consensus": consensus, "reason": reason}
+async def research_query(client, key, model, persona, topic, details, transcript):
+    """Ask the speaker whether to search; returns a query string or None."""
+    try:
+        decision = await _complete(
+            client, key, model,
+            build_research_messages(persona, topic, details, transcript),
+            max_tokens=40, temperature=0.3,
+        )
+    except Exception:
+        return None
+    if decision.strip().upper().startswith("QUERY:"):
+        return decision.split(":", 1)[1].strip()[:120]
+    return None
 
 
-async def run_decision(topic, details, history, key=None, model=None):
-    """Stream the facilitator's closing decision."""
-    key = resolve_key(key)
-    model = resolve_model(model)
-    async with httpx.AsyncClient() as client:
-        try:
-            async for delta in _stream(
-                client, key, model,
-                build_decision_messages(topic, details, _render(history or [])),
-                max_tokens=600, temperature=0.3,
-            ):
-                yield "decision_token", {"text": delta}
-        except Exception as e:
-            yield "error", {"message": _friendly_error(e)}
-    yield "done", {}
+def speak_messages(persona, topic, details, transcript, round_no, total, research):
+    return build_speak_messages(persona, topic, details, transcript, round_no, total, research)
+
+
+def decision_messages(topic, details, history):
+    return build_decision_messages(topic, details, render_transcript(history))

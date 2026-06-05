@@ -5,251 +5,372 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AI Consultation Rooms</title>
 <style>
-  :root { --bg:#0f172a; --panel:#1e293b; --panel2:#334155; --text:#e2e8f0; --muted:#94a3b8; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    background: var(--bg); color: var(--text); height:100vh; display:flex; flex-direction:column; }
-  header { padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--panel2); }
-  header h1 { margin:0; font-size:18px; }
-  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
-  .setup { padding:14px 20px; background:var(--panel); border-bottom:1px solid var(--panel2);
-           display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
-  .setup label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:4px; }
-  .setup input { background:var(--bg); border:1px solid var(--panel2); color:var(--text);
-                 padding:8px 10px; border-radius:8px; font-size:14px; }
-  #topic { width:260px; } #details { width:300px; } #rounds { width:64px; } #key { width:220px; }
-  button { background:#2563eb; color:#fff; border:0; padding:10px 18px; border-radius:8px;
-           font-size:14px; cursor:pointer; font-weight:600; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .main { flex:1; display:flex; min-height:0; }
-  .chat { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:14px; }
-  .side { width:280px; border-left:1px solid var(--panel2); background:var(--panel); padding:16px; overflow-y:auto; }
-  .side h3 { margin:0 0 10px; font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
-  .msg { display:flex; gap:10px; max-width:82%; }
-  .avatar { width:34px; height:34px; border-radius:50%; flex-shrink:0; display:flex;
-            align-items:center; justify-content:center; font-weight:700; color:#fff; font-size:14px; }
-  .bubble { background:var(--panel); border-radius:12px; padding:10px 14px; }
-  .bubble .who { font-size:12px; font-weight:700; margin-bottom:3px; }
-  .bubble .who span { color:var(--muted); font-weight:400; }
-  .bubble .body { font-size:14px; line-height:1.5; white-space:pre-wrap; }
-  .search-note { font-size:12px; color:#fbbf24; font-style:italic; margin:4px 0 0; }
-  .system { align-self:center; color:var(--muted); font-size:12px; background:var(--panel2);
-            padding:5px 12px; border-radius:20px; text-align:center; }
-  .system.ok { background:#064e3b; color:#6ee7b7; }
-  .bid { margin-bottom:10px; }
-  .bid .row { display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; }
-  .bid .reason { font-size:11px; color:var(--muted); }
-  .bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
-  .bar > div { height:100%; transition:width .3s; }
-  .bid.winner { outline:2px solid #fbbf24; border-radius:8px; padding:6px; margin:-6px -6px 10px; }
-  .decision { align-self:stretch; background:#0c4a6e; border:1px solid #0ea5e9; border-radius:12px;
-              padding:16px; white-space:pre-wrap; font-size:14px; line-height:1.6; }
-  .decision h2 { margin:0 0 8px; font-size:15px; }
-  .typing { display:inline-block; width:8px; height:14px; background:var(--text); margin-left:2px;
-            animation:blink 1s steps(2) infinite; vertical-align:middle; }
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  :root{ --bg:#0b1220; --panel:#131c2e; --panel2:#1e293b; --line:#2a3852;
+         --text:#e2e8f0; --muted:#8aa0bd; --accent:#3b82f6; }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; }
+  body{ font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg);
+        color:var(--text); display:flex; height:100vh; overflow:hidden; }
+  button{ font:inherit; cursor:pointer; border:0; border-radius:9px; }
 
-  /* --- Mobile: stack the panels instead of placing them side-by-side --- */
-  @media (max-width: 760px) {
-    header p { font-size:12px; }
-    .setup { padding:12px; gap:8px; }
-    .setup label { width:100%; }
-    .setup input,
-    #topic, #details, #rounds, #key { width:100%; }
-    .setup button { width:100%; padding:12px; }
-    .main { flex-direction:column; }
-    .side {
-      order:-1;              /* raised hands above the chat */
-      width:auto;
-      border-left:none;
-      border-bottom:1px solid var(--panel2);
-      max-height:32vh;
-      padding:12px 14px;
-    }
-    .chat { padding:14px; }
-    .msg { max-width:100%; }
+  /* Sidebar */
+  .sidebar{ width:260px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--line);
+            display:flex; flex-direction:column; padding:14px; gap:10px; z-index:20; }
+  .brand{ font-size:17px; font-weight:700; display:flex; align-items:center; gap:8px; padding:4px 2px 8px; }
+  .sidebar .btn{ background:var(--accent); color:#fff; padding:11px; font-weight:600; }
+  .sidebar .btn.ghost{ background:var(--panel2); color:var(--text); }
+  .mlist{ margin-top:6px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+  .mlist h4{ color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:8px 2px 2px; }
+  .mitem{ background:var(--panel2); border:1px solid transparent; border-radius:9px; padding:9px 11px; }
+  .mitem:hover{ border-color:var(--line); }
+  .mitem.active{ border-color:var(--accent); }
+  .mitem .t{ font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mitem .s{ font-size:11px; color:var(--muted); margin-top:2px; display:flex; gap:6px; align-items:center; }
+  .dot{ width:7px; height:7px; border-radius:50%; display:inline-block; }
+  .dot.running{ background:#fbbf24; animation:pulse 1.2s infinite; }
+  .dot.done{ background:#34d399; } .dot.error{ background:#f87171; }
+  @keyframes pulse{ 50%{opacity:.3} }
+
+  /* Content */
+  .content{ flex:1; display:flex; flex-direction:column; min-width:0; }
+  .topbar{ display:none; align-items:center; gap:10px; padding:10px 14px; background:var(--panel);
+           border-bottom:1px solid var(--line); }
+  .topbar .ham{ background:var(--panel2); color:var(--text); padding:8px 12px; font-size:16px; }
+
+  /* Compose */
+  .compose{ flex:1; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .compose-card{ width:100%; max-width:560px; background:var(--panel); border:1px solid var(--line);
+                 border-radius:16px; padding:26px; }
+  .compose-card h1{ margin:0 0 4px; font-size:21px; }
+  .compose-card p{ margin:0 0 18px; color:var(--muted); font-size:13px; }
+  label{ display:block; font-size:12px; color:var(--muted); margin:14px 0 5px; }
+  input,select,textarea{ width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text);
+         padding:11px 12px; border-radius:9px; font-size:14px; font-family:inherit; }
+  textarea{ resize:vertical; min-height:64px; }
+  .row{ display:flex; gap:12px; } .row>div{ flex:1; }
+  .primary{ background:var(--accent); color:#fff; padding:13px; font-weight:600; width:100%; margin-top:18px; }
+  .hint{ font-size:12px; color:var(--muted); margin-top:10px; }
+  .hint a{ color:var(--accent); }
+
+  /* Room */
+  .room{ flex:1; display:flex; flex-direction:column; min-height:0; }
+  .room-head{ padding:13px 18px; border-bottom:1px solid var(--line); background:var(--panel);
+              display:flex; align-items:center; gap:10px; }
+  .room-head h2{ margin:0; font-size:16px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badge{ font-size:11px; padding:4px 9px; border-radius:20px; background:var(--panel2); color:var(--muted); }
+  .room-body{ flex:1; display:flex; min-height:0; }
+  .chat{ flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:13px; }
+  .hands{ width:270px; flex-shrink:0; border-left:1px solid var(--line); background:var(--panel);
+          padding:15px; overflow-y:auto; }
+  .hands h3{ margin:0 0 10px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+
+  .msg{ display:flex; gap:10px; max-width:84%; }
+  .avatar{ width:34px; height:34px; border-radius:50%; flex-shrink:0; display:flex; align-items:center;
+           justify-content:center; font-weight:700; color:#fff; font-size:14px; }
+  .bubble{ background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:10px 14px; }
+  .bubble .who{ font-size:12px; font-weight:700; margin-bottom:3px; }
+  .bubble .who span{ color:var(--muted); font-weight:400; }
+  .bubble .body{ font-size:14px; line-height:1.55; white-space:pre-wrap; }
+  .search-note{ font-size:12px; color:#fbbf24; font-style:italic; margin-top:5px; }
+  .system{ align-self:center; color:var(--muted); font-size:12px; background:var(--panel2);
+           padding:5px 12px; border-radius:20px; text-align:center; }
+  .system.ok{ background:#064e3b; color:#6ee7b7; }
+  .bid{ margin-bottom:11px; }
+  .bid .r{ display:flex; justify-content:space-between; font-size:13px; margin-bottom:3px; }
+  .bid .reason{ font-size:11px; color:var(--muted); }
+  .bar{ height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
+  .bar>div{ height:100%; transition:width .3s; }
+  .bid.winner{ outline:2px solid #fbbf24; border-radius:8px; padding:6px; margin:-6px -6px 11px; }
+  .decision{ align-self:stretch; background:#0c2a45; border:1px solid #0ea5e9; border-radius:13px;
+             padding:16px; white-space:pre-wrap; font-size:14px; line-height:1.6; }
+  .decision h2{ margin:0 0 8px; font-size:15px; }
+  .typing{ display:inline-block; width:8px; height:14px; background:var(--text); margin-left:2px;
+           animation:blink 1s steps(2) infinite; vertical-align:middle; }
+  @keyframes blink{ 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* Modal */
+  .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center;
+            justify-content:center; z-index:40; padding:18px; }
+  .modal{ width:100%; max-width:440px; background:var(--panel); border:1px solid var(--line);
+          border-radius:16px; padding:22px; }
+  .modal h2{ margin:0 0 12px; font-size:17px; }
+  .modal .actions{ display:flex; gap:10px; margin-top:18px; }
+  .modal .actions button{ flex:1; padding:12px; font-weight:600; }
+  .save{ background:var(--accent); color:#fff; } .cancel{ background:var(--panel2); color:var(--text); }
+  .switch{ display:flex; align-items:center; gap:8px; margin-top:14px; }
+  .switch input{ width:auto; }
+
+  [hidden]{ display:none !important; }
+
+  @media (max-width:760px){
+    .sidebar{ position:fixed; inset:0 auto 0 0; transform:translateX(-100%); transition:transform .2s; box-shadow:2px 0 20px rgba(0,0,0,.4); }
+    .sidebar.open{ transform:translateX(0); }
+    .topbar{ display:flex; }
+    .room-body{ flex-direction:column; }
+    .hands{ order:-1; width:auto; border-left:0; border-bottom:1px solid var(--line); max-height:30vh; }
+    .msg{ max-width:100%; }
+    .scrim{ position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:15; }
   }
 </style>
 </head>
 <body>
-  <header>
-    <h1>🪑 AI Consultation Rooms</h1>
-    <p>Personas debate your topic, search the web, challenge each other, and stop when they reach consensus.</p>
-  </header>
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">🪑 AI Rooms</div>
+    <button class="btn" id="newBtn">＋ New meeting</button>
+    <button class="btn ghost" id="settingsBtn">⚙ Settings</button>
+    <div class="mlist" id="mlist"><h4>Meetings</h4></div>
+  </aside>
 
-  <div class="setup">
-    <label>OpenRouter API key
-      <input id="key" type="password" placeholder="sk-or-v1-..." />
-    </label>
-    <label>Topic
-      <input id="topic" placeholder="e.g. Mobile app or web app first?" />
-    </label>
-    <label>Details (optional)
-      <input id="details" placeholder="Context, constraints, goals..." />
-    </label>
-    <label>Max rounds
-      <input id="rounds" type="number" value="10" min="2" max="20" />
-    </label>
-    <button id="start">Start meeting</button>
+  <div class="content">
+    <div class="topbar">
+      <button class="ham" id="hamBtn">☰</button>
+      <strong>AI Consultation Rooms</strong>
+    </div>
+
+    <!-- Compose -->
+    <div class="compose" id="compose">
+      <div class="compose-card">
+        <h1>New meeting</h1>
+        <p>Give the room a topic. The personas will debate it, challenge each other, and stop when they reach consensus.</p>
+        <label>Topic</label>
+        <input id="topic" placeholder="e.g. Should we build a mobile app or a web app first?" />
+        <label>Details (optional)</label>
+        <textarea id="details" placeholder="Context, constraints, goals..."></textarea>
+        <div class="row">
+          <div>
+            <label>Max rounds</label>
+            <input id="rounds" type="number" value="8" min="2" max="20" />
+          </div>
+          <div class="switch" style="margin-top:30px">
+            <input type="checkbox" id="searchToggle" />
+            <label style="margin:0">Enable web search (slower)</label>
+          </div>
+        </div>
+        <button class="primary" id="startBtn">Start meeting</button>
+        <div class="hint" id="composeHint"></div>
+      </div>
+    </div>
+
+    <!-- Room -->
+    <div class="room" id="room" hidden>
+      <div class="room-head">
+        <h2 id="roomTopic"></h2>
+        <span class="badge" id="roomBadge">running</span>
+      </div>
+      <div class="room-body">
+        <div class="chat" id="chat"></div>
+        <div class="hands">
+          <h3>🙋 Raised hands</h3>
+          <div id="bids"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="main">
-    <div class="chat" id="chat"></div>
-    <div class="side">
-      <h3>🙋 Raised hands (this round)</h3>
-      <div id="bids"></div>
+  <!-- Settings modal -->
+  <div class="overlay" id="settingsModal" hidden>
+    <div class="modal">
+      <h2>⚙ Settings</h2>
+      <label>OpenRouter API key</label>
+      <input id="setKey" type="password" placeholder="sk-or-v1-..." />
+      <label>Model</label>
+      <select id="setModel">
+        <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B (balanced, default)</option>
+        <option value="google/gemini-2.0-flash-exp:free">Gemini 2.0 Flash (fastest)</option>
+        <option value="deepseek/deepseek-chat-v3-0324:free">DeepSeek V3 (strong reasoning)</option>
+        <option value="qwen/qwen-2.5-72b-instruct:free">Qwen 2.5 72B</option>
+        <option value="z-ai/glm-4.5-air:free">GLM 4.5 Air (reasoning, slower)</option>
+        <option value="__custom">Custom…</option>
+      </select>
+      <input id="setModelCustom" placeholder="custom model id" hidden style="margin-top:8px" />
+      <div class="hint" style="margin-top:10px">The key is sent to your server only to run meetings and is stored in this browser. Don't share a deployed link that has your key saved.</div>
+      <div class="actions">
+        <button class="cancel" id="cancelSettings">Cancel</button>
+        <button class="save" id="saveSettings">Save</button>
+      </div>
     </div>
   </div>
 
 <script>
-const chat = document.getElementById('chat');
-const bidsEl = document.getElementById('bids');
-const startBtn = document.getElementById('start');
-const keyEl = document.getElementById('key');
-keyEl.value = localStorage.getItem('or_key') || '';
+const $ = id => document.getElementById(id);
+const PARTICIPANTS = {
+  maya:{name:'Maya',role:'Pragmatic Product Lead',color:'#2563eb'},
+  karim:{name:'Karim',role:'Skeptical Engineer',color:'#dc2626'},
+  lina:{name:'Lina',role:'Visionary',color:'#7c3aed'},
+  omar:{name:'Omar',role:'Data & Cost Analyst',color:'#059669'},
+};
 
-let participants = {};
-let currentBody = null, currentCursor = null;
-let running = false;
+// --- settings (localStorage) ---
+const S = {
+  get key(){ return localStorage.getItem('or_key')||''; },
+  set key(v){ localStorage.setItem('or_key', v); },
+  get model(){ return localStorage.getItem('or_model')||'meta-llama/llama-3.3-70b-instruct:free'; },
+  set model(v){ localStorage.setItem('or_model', v); },
+};
 
-function clear(){ chat.innerHTML=''; bidsEl.innerHTML=''; participants={}; }
-function scroll(){ chat.scrollTop = chat.scrollHeight; }
-function sys(text, ok){ const d=document.createElement('div'); d.className='system'+(ok?' ok':'');
-  d.textContent=text; chat.appendChild(d); scroll(); }
+// --- modal ---
+function openSettings(){
+  $('setKey').value = S.key;
+  const known = [...$('setModel').options].some(o=>o.value===S.model);
+  if(known){ $('setModel').value=S.model; $('setModelCustom').hidden=true; }
+  else{ $('setModel').value='__custom'; $('setModelCustom').hidden=false; $('setModelCustom').value=S.model; }
+  $('settingsModal').hidden=false;
+}
+$('settingsBtn').onclick = openSettings;
+$('cancelSettings').onclick = ()=> $('settingsModal').hidden=true;
+$('setModel').onchange = e => $('setModelCustom').hidden = e.target.value!=='__custom';
+$('saveSettings').onclick = ()=>{
+  S.key = $('setKey').value.trim();
+  S.model = $('setModel').value==='__custom' ? $('setModelCustom').value.trim() : $('setModel').value;
+  $('settingsModal').hidden=true;
+  refreshHint();
+};
+function refreshHint(){
+  $('composeHint').innerHTML = S.key
+    ? 'Model: <b>'+S.model.split('/').pop()+'</b> · <a href="#" id="openSet">change in Settings</a>'
+    : '⚠️ No API key set. <a href="#" id="openSet">Open Settings</a> and paste your OpenRouter key (free at openrouter.ai/keys).';
+  const a=$('openSet'); if(a) a.onclick=e=>{e.preventDefault(); openSettings();};
+}
 
+// --- sidebar (mobile) ---
+$('hamBtn').onclick = ()=> $('sidebar').classList.add('open');
+$('newBtn').onclick = ()=> showCompose();
+
+// --- views ---
+function showCompose(){
+  stopStream();
+  $('room').hidden=true; $('compose').hidden=false;
+  $('sidebar').classList.remove('open');
+  setActive(null);
+}
+function showRoom(topic){
+  $('compose').hidden=true; $('room').hidden=false;
+  $('roomTopic').textContent = topic;
+  $('sidebar').classList.remove('open');
+}
+
+// --- chat rendering ---
+const chat=$('chat'), bidsEl=$('bids');
+let curBody=null, curCursor=null, curBubble=null, decisionBox=null;
+function clearRoom(){ chat.innerHTML=''; bidsEl.innerHTML=''; curBody=curCursor=curBubble=decisionBox=null; }
+function scroll(){ chat.scrollTop=chat.scrollHeight; }
+function sys(t, ok){ const d=document.createElement('div'); d.className='system'+(ok?' ok':''); d.textContent=t; chat.appendChild(d); scroll(); }
 function startBubble(p){
-  const wrap=document.createElement('div'); wrap.className='msg';
-  const av=document.createElement('div'); av.className='avatar'; av.style.background=p.color; av.textContent=p.name[0];
-  const bub=document.createElement('div'); bub.className='bubble';
-  bub.innerHTML=`<div class="who" style="color:${p.color}">${p.name} <span>· ${p.role}</span></div>`;
+  const w=document.createElement('div'); w.className='msg';
+  const a=document.createElement('div'); a.className='avatar'; a.style.background=p.color; a.textContent=p.name[0];
+  const b=document.createElement('div'); b.className='bubble';
+  b.innerHTML=`<div class="who" style="color:${p.color}">${p.name} <span>· ${p.role}</span></div>`;
   const body=document.createElement('div'); body.className='body';
-  const cursor=document.createElement('span'); cursor.className='typing'; body.appendChild(cursor);
-  bub.appendChild(body); wrap.appendChild(av); wrap.appendChild(bub); chat.appendChild(wrap); scroll();
-  currentBody=body; currentCursor=cursor; window._bub=bub;
+  const cur=document.createElement('span'); cur.className='typing'; body.appendChild(cur);
+  b.appendChild(body); w.appendChild(a); w.appendChild(b); chat.appendChild(w); scroll();
+  curBody=body; curCursor=cur; curBubble=b;
 }
-function searchNote(query){
-  if(!window._bub) return;
-  const n=document.createElement('div'); n.className='search-note'; n.textContent='🔎 searched the web: "'+query+'"';
-  window._bub.appendChild(n); scroll();
-}
-function appendToken(t){ if(currentBody) currentCursor.insertAdjacentText('beforebegin', t); scroll(); }
-function endBubble(){ if(currentCursor) currentCursor.remove(); currentBody=null; currentCursor=null; }
-
+function tok(t){ if(curBody) curCursor.insertAdjacentText('beforebegin', t); scroll(); }
+function endBubble(){ if(curCursor) curCursor.remove(); curBody=curCursor=null; }
+function note(q){ if(!curBubble) return; const n=document.createElement('div'); n.className='search-note'; n.textContent='🔎 searched the web: "'+q+'"'; curBubble.appendChild(n); scroll(); }
 function renderBids(bids){
   bidsEl.innerHTML='';
-  const sorted=[...bids].sort((a,b)=>b.effective-a.effective);
-  const winner=sorted[0].id;
-  sorted.forEach(b=>{
-    const d=document.createElement('div'); d.className='bid'+(b.id===winner?' winner':'');
-    d.innerHTML=`<div class="row"><span style="color:${b.color};font-weight:600">${b.name}</span>
-      <span>${b.urgency}/10</span></div>
+  const sorted=[...bids].sort((a,b)=>b.effective-a.effective); const win=sorted[0]?.id;
+  sorted.forEach(b=>{ const d=document.createElement('div'); d.className='bid'+(b.id===win?' winner':'');
+    d.innerHTML=`<div class="r"><span style="color:${b.color};font-weight:600">${b.name}</span><span>${b.urgency}/10</span></div>
       <div class="bar"><div style="width:${b.urgency*10}%;background:${b.color}"></div></div>
-      <div class="reason">${b.reason||''}</div>`;
-    bidsEl.appendChild(d);
-  });
+      <div class="reason">${b.reason||''}</div>`; bidsEl.appendChild(d); });
 }
-function decisionBox(){
-  const d=document.createElement('div'); d.className='decision';
-  d.innerHTML='<h2>✅ Facilitator decision</h2><div class="dbody"></div>';
-  chat.appendChild(d); scroll(); return d.querySelector('.dbody');
-}
+function badge(text, cls){ const el=$('roomBadge'); el.textContent=text; el.style.background = cls==='ok'?'#064e3b':cls==='err'?'#3a1212':'var(--panel2)'; el.style.color = cls==='ok'?'#6ee7b7':cls==='err'?'#fca5a5':'var(--muted)'; }
 
-// --- Parse an SSE stream coming back from a fetch() POST ---
-async function streamPost(url, body, onEvent){
-  const res = await fetch(url, {
-    method:'POST',
-    headers:{ 'Content-Type':'application/json', 'X-OpenRouter-Key': keyEl.value.trim() },
-    body: JSON.stringify(body)
-  });
-  if(!res.ok){ throw new Error('HTTP '+res.status); }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf='';
-  while(true){
-    const {value, done} = await reader.read();
-    if(done) break;
-    buf += dec.decode(value, {stream:true});
-    let idx;
-    while((idx = buf.indexOf('\n\n')) >= 0){
-      const raw = buf.slice(0, idx); buf = buf.slice(idx+2);
-      let ev='message', data='';
-      raw.split('\n').forEach(line=>{
-        if(line.startsWith('event:')) ev=line.slice(6).trim();
-        else if(line.startsWith('data:')) data+=line.slice(5).trim();
-      });
-      if(data) onEvent(ev, JSON.parse(data));
-    }
+function handle(ev, data){
+  switch(ev){
+    case 'meeting_started': clearRoom(); sys('Meeting started · '+data.participants.map(p=>p.name).join(', ')); break;
+    case 'round': sys(`— Round ${data.n} of ${data.total} —`); break;
+    case 'bids': renderBids(data.bids); break;
+    case 'turn_start': startBubble(PARTICIPANTS[data.id]||data); break;
+    case 'searching': note(data.query); break;
+    case 'token': tok(data.text); break;
+    case 'turn_end': endBubble(); break;
+    case 'consensus': sys('🤝 Consensus reached — '+(data.reason||''), true); break;
+    case 'deciding': sys('Facilitator is writing the decision…'); decisionBox=null; break;
+    case 'decision_token':
+      if(!decisionBox){ const d=document.createElement('div'); d.className='decision';
+        d.innerHTML='<h2>✅ Facilitator decision</h2><div class="db"></div>'; chat.appendChild(d); decisionBox=d.querySelector('.db'); }
+      decisionBox.textContent += data.text; scroll(); break;
+    case 'error': sys('⚠️ '+data.message); badge('error','err'); break;
+    case 'done': badge(data.status==='error'?'error':'ended', data.status==='error'?'err':'ok');
+      if(data.status!=='error') sys('Meeting ended.', true); break;
   }
 }
 
-const PERSONAS_META = [
-  {id:'maya',name:'Maya',role:'Pragmatic Product Lead',color:'#2563eb'},
-  {id:'karim',name:'Karim',role:'Skeptical Engineer',color:'#dc2626'},
-  {id:'lina',name:'Lina',role:'Visionary',color:'#7c3aed'},
-  {id:'omar',name:'Omar',role:'Data & Cost Analyst',color:'#059669'},
-];
-PERSONAS_META.forEach(p=>participants[p.id]=p);
-
-async function runMeeting(){
-  const topic = document.getElementById('topic').value.trim();
-  if(!topic){ alert('Enter a topic'); return; }
-  if(!keyEl.value.trim()){ alert('Paste your OpenRouter API key'); return; }
-  localStorage.setItem('or_key', keyEl.value.trim());
-  const details = document.getElementById('details').value.trim();
-  const total = parseInt(document.getElementById('rounds').value)||10;
-
-  running=true; startBtn.disabled=true; startBtn.textContent='Meeting in progress…';
-  clear();
-  sys('Meeting started · '+PERSONAS_META.map(p=>p.name).join(', '));
-
-  let history=[];
-  let reachedConsensus=false;
-
-  try {
-    for(let round=1; round<=total && running; round++){
-      sys(`— Round ${round} of ${total} —`);
-      let verdict={consensus:false};
-      let turnText='', turnSpeaker=null;
-
-      await streamPost('/api/step',
-        {topic, details, history, round, total},
-        (ev, data)=>{
-          if(ev==='bids') renderBids(data.bids);
-          else if(ev==='turn_start'){ startBubble(participants[data.id]||data); turnSpeaker=data.name; }
-          else if(ev==='searching') searchNote(data.query);
-          else if(ev==='token') appendToken(data.text);
-          else if(ev==='turn_end'){ endBubble(); turnText=data.text; turnSpeaker=data.name; }
-          else if(ev==='verdict') verdict=data;
-          else if(ev==='error'){ throw new Error(data.message); }
-        });
-
-      if(turnSpeaker && turnText) history.push({name:turnSpeaker, text:turnText});
-
-      if(verdict.consensus){
-        reachedConsensus=true;
-        sys('🤝 Consensus reached — '+(verdict.reason||''), true);
-        break;
+// --- SSE over fetch, with reconnect/replay ---
+let streamGen=0;
+function stopStream(){ streamGen++; }
+async function connect(id){
+  const myGen=++streamGen;
+  currentId=id; localStorage.setItem('cur_meeting', id); setActive(id);
+  while(myGen===streamGen){
+    clearRoom();
+    let finished=false;
+    try{
+      const res=await fetch(`/api/meetings/${id}/stream`);
+      if(!res.ok){ sys('⚠️ could not load meeting'); return; }
+      const reader=res.body.getReader(); const dec=new TextDecoder(); let buf='';
+      while(myGen===streamGen){
+        const {value,done}=await reader.read(); if(done) break;
+        buf+=dec.decode(value,{stream:true}); let i;
+        while((i=buf.indexOf('\n\n'))>=0){
+          const raw=buf.slice(0,i); buf=buf.slice(i+2);
+          let e='message', d=''; raw.split('\n').forEach(l=>{ if(l.startsWith('event:')) e=l.slice(6).trim(); else if(l.startsWith('data:')) d+=l.slice(5).trim(); });
+          if(d){ const data=JSON.parse(d); handle(e,data); if(e==='done') finished=true; }
+        }
       }
-    }
-
-    if(!reachedConsensus) sys('Round limit reached — closing out.');
-
-    sys('Facilitator is writing the decision…');
-    const box = decisionBox();
-    await streamPost('/api/decision', {topic, details, history}, (ev, data)=>{
-      if(ev==='decision_token') box.textContent += data.text;
-      else if(ev==='error') box.textContent = '⚠️ '+data.message;
-      scroll();
-    });
-    sys('Meeting ended.', true);
-  } catch(e){
-    sys('⚠️ '+e.message);
-  } finally {
-    running=false; startBtn.disabled=false; startBtn.textContent='Start meeting';
+    }catch(err){ /* network drop → reconnect below */ }
+    if(finished || myGen!==streamGen) return;
+    await new Promise(r=>setTimeout(r,1000)); // dropped mid-meeting: reconnect & replay
   }
 }
 
-startBtn.onclick = runMeeting;
+// --- start a meeting ---
+let currentId=null;
+$('startBtn').onclick = async ()=>{
+  if(!S.key){ openSettings(); return; }
+  const topic=$('topic').value.trim(); if(!topic){ $('topic').focus(); return; }
+  $('startBtn').disabled=true; $('startBtn').textContent='Starting…';
+  try{
+    const res=await fetch('/api/meetings',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ topic, details:$('details').value.trim(),
+        total:parseInt($('rounds').value)||8, key:S.key, model:S.model, search:$('searchToggle').checked }) });
+    const j=await res.json();
+    if(!res.ok){ alert(j.error||'Failed to start'); return; }
+    showRoom(topic); badge('running'); connect(j.id); loadMeetings();
+  }catch(e){ alert('Failed: '+e.message); }
+  finally{ $('startBtn').disabled=false; $('startBtn').textContent='Start meeting'; }
+};
+
+// --- meetings list ---
+function setActive(id){ [...document.querySelectorAll('.mitem')].forEach(el=> el.classList.toggle('active', el.dataset.id===id)); }
+async function loadMeetings(){
+  try{
+    const j=await (await fetch('/api/meetings')).json();
+    const list=$('mlist'); list.innerHTML='<h4>Meetings</h4>';
+    j.meetings.forEach(m=>{
+      const el=document.createElement('div'); el.className='mitem'+(m.id===currentId?' active':''); el.dataset.id=m.id;
+      el.innerHTML=`<div class="t">${m.topic||'(untitled)'}</div>
+        <div class="s"><span class="dot ${m.status}"></span>${m.status} · ${m.rounds_done} turns</div>`;
+      el.onclick=()=>{ showRoom(m.topic); connect(m.id); };
+      list.appendChild(el);
+    });
+  }catch(e){}
+}
+setInterval(loadMeetings, 4000);
+
+// --- init ---
+refreshHint();
+loadMeetings();
+const saved=localStorage.getItem('cur_meeting');
+if(saved){ // try to resume the last meeting
+  fetch('/api/meetings').then(r=>r.json()).then(j=>{
+    const m=j.meetings.find(x=>x.id===saved);
+    if(m){ showRoom(m.topic); connect(m.id); }
+  });
+}
 </script>
 </body>
 </html>
