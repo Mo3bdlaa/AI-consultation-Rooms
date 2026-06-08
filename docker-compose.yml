@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  # Reverse proxy. With a domain in SITE_ADDRESS it gets automatic HTTPS;
+  # left as ":80" it just serves plain HTTP on the server's IP.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,9 @@
+# SITE_ADDRESS is ":80" by default (plain HTTP on the server IP).
+# Set it to your domain (e.g. rooms.example.com) to get automatic HTTPS.
+{$SITE_ADDRESS} {
+	# flush_interval -1 keeps the SSE stream live (no buffering) so the chat
+	# really streams token-by-token through the proxy.
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+}
