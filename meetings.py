@@ -1,12 +1,13 @@
-"""Server-side meeting engine.
+"""Meeting engine (serverless-friendly).
 
-A meeting runs as a background asyncio task that appends events to an in-memory
-log. Browsers subscribe to that log over SSE and can disconnect / reconnect at
-any time (we replay from the beginning), so the meeting keeps running on the
-server even when no one is watching.
+Unlike the original background-task design, a meeting here runs *inside* the SSE
+request that streams it (`run_and_stream`). This fits platforms like Vercel where
+functions are short-lived and can't keep a task alive after the response ends.
 
-State is in-memory only: meetings are lost if the process restarts. That's fine
-for a POC; swap in a DB later for durability.
+As the meeting runs we persist a compact event log to SQLite (see db.py), so a
+finished meeting can be replayed from the sidebar later (`replay`). State that is
+held in memory (MEETINGS, the API key) only lives for the request that runs the
+meeting; everything needed to re-watch it afterwards is in the database.
 """
 
 import time
@@ -15,9 +16,9 @@ import asyncio
 
 import httpx
 
+import db
 from personas import PERSONAS
 from room import (
-    DEFAULT_MODEL,
     resolve_key,
     resolve_model,
     organizer,
@@ -35,7 +36,7 @@ PARTICIPANTS = [
     for p in PERSONAS
 ]
 
-_MAX_MEETINGS = 50  # keep memory bounded; evict oldest beyond this
+_MAX_MEETINGS = 50  # keep the in-memory map bounded
 
 
 class Meeting:
@@ -44,49 +45,24 @@ class Meeting:
         self.topic = topic
         self.details = details
         self.total = total
-        self.key = key
+        self.key = key                 # in memory only, never persisted
         self.model = model
         self.enable_search = enable_search
         self.created = time.time()
-        self.status = "running"  # running | done | error
-        self.events = []          # list of {"event":..., "data":...}
-        self._waiters = []        # futures woken on each new event
-        self.history = []         # [{name, text}]
-
-    # --- event plumbing ---
-    def _emit(self, event, data):
-        self.events.append({"event": event, "data": data})
-        for fut in self._waiters:
-            if not fut.done():
-                fut.set_result(None)
-        self._waiters = []
-
-    async def wait_for_event(self):
-        fut = asyncio.get_event_loop().create_future()
-        self._waiters.append(fut)
-        await fut
-
-    def summary(self):
-        last = self.history[-1]["text"][:60] if self.history else ""
-        return {
-            "id": self.id,
-            "topic": self.topic,
-            "status": self.status,
-            "created": self.created,
-            "rounds_done": len(self.history),
-            "last": last,
-        }
+        self.status = "pending"        # pending | running | done | error
+        self.started = False           # set true once a stream begins running it
+        self.history = []              # [{name, text}]
+        self.log = []                  # compact, persisted events
 
 
-MEETINGS = {}  # id -> Meeting
+MEETINGS = {}  # id -> Meeting (only meaningful on the instance that runs it)
 
 
 def _evict_if_needed():
     if len(MEETINGS) <= _MAX_MEETINGS:
         return
-    # drop the oldest finished meetings first
     finished = sorted(
-        (m for m in MEETINGS.values() if m.status != "running"),
+        (m for m in MEETINGS.values() if m.status not in ("pending", "running")),
         key=lambda m: m.created,
     )
     for m in finished[: len(MEETINGS) - _MAX_MEETINGS]:
@@ -100,35 +76,48 @@ def create_meeting(topic, details, total, key, model, enable_search):
     m = Meeting(topic, details, total, key, model, enable_search)
     MEETINGS[m.id] = m
     _evict_if_needed()
-    asyncio.create_task(_run(m))
+    db.create(m)                           # persist a "pending" row
     return m
 
 
 def list_meetings():
-    return sorted((m.summary() for m in MEETINGS.values()),
-                  key=lambda s: s["created"], reverse=True)
+    # The database is the source of truth for the sidebar so history shows up
+    # even for meetings this instance never ran.
+    return db.list_all()
 
 
-async def _run(m):
-    """The background meeting loop."""
+def _ev(m, event, data, persist=True):
+    """Build an SSE event dict and (optionally) add it to the persisted log.
+
+    Token-level events are streamed to the browser but not persisted (there can
+    be thousands); on replay we reconstruct them from the stored turn text.
+    """
+    if persist:
+        m.log.append({"event": event, "data": data})
+    return {"event": event, "data": data}
+
+
+async def run_and_stream(m):
+    """Run the whole meeting, yielding events and persisting as we go."""
+    m.status = "running"
+    decision_text = ""
     try:
-        m._emit("meeting_started", {
+        yield _ev(m, "meeting_started", {
             "id": m.id, "topic": m.topic, "details": m.details,
             "total": m.total, "participants": PARTICIPANTS,
         })
         async with httpx.AsyncClient() as client:
             last_speaker = None
             for round_no in range(1, m.total + 1):
-                m._emit("round", {"n": round_no, "total": m.total})
+                yield _ev(m, "round", {"n": round_no, "total": m.total})
                 transcript = render_transcript(m.history)
 
-                # 1. Organizer: scores + consensus (single call) -------------
+                # 1. Organizer: scores + consensus (single call)
                 scores, matched, consensus, creason = await organizer(
                     client, m.key, m.model, m.topic, m.details, transcript
                 )
-                # Stop early if the room genuinely agreed.
                 if consensus and len(m.history) >= 2:
-                    m._emit("consensus", {"reason": creason})
+                    yield _ev(m, "consensus", {"reason": creason})
                     break
 
                 bids, ordered = [], []
@@ -138,9 +127,8 @@ async def _run(m):
                     bids.append({"id": p["id"], "name": p["name"], "color": p["color"],
                                  "urgency": urgency, "effective": effective, "reason": reason})
                     ordered.append((effective, p))
-                m._emit("bids", {"bids": bids})
+                yield _ev(m, "bids", {"bids": bids})
 
-                # Fallback to round-robin if the model gave us nothing usable.
                 if matched == 0:
                     idx = (round_no - 1) % len(PERSONAS)
                     speaker = PERSONAS[idx]
@@ -149,57 +137,79 @@ async def _run(m):
                 else:
                     speaker = max(ordered, key=lambda t: t[0])[1]
 
-                m._emit("turn_start", {"id": speaker["id"], "name": speaker["name"],
-                                       "role": speaker["role"], "color": speaker["color"]})
+                yield _ev(m, "turn_start", {"id": speaker["id"], "name": speaker["name"],
+                                            "role": speaker["role"], "color": speaker["color"]})
 
-                # 2. Research (optional) ------------------------------------
+                # 2. Research (optional)
                 research = None
                 if m.enable_search:
                     q = await research_query(client, m.key, m.model, speaker,
                                              m.topic, m.details, transcript)
                     if q:
-                        m._emit("searching", {"id": speaker["id"], "query": q})
+                        yield _ev(m, "searching", {"id": speaker["id"], "query": q})
                         hits = await web_search(client, q)
                         research = {"query": q, "results": hits}
-                        m._emit("search_results", {"id": speaker["id"], "query": q, "results": hits})
+                        yield _ev(m, "search_results",
+                                  {"id": speaker["id"], "query": q, "results": hits})
 
-                # 3. Speaking (streamed) ------------------------------------
+                # 3. Speaking (streamed; tokens not persisted individually)
                 buffer = []
                 async for delta in stream_completion(
                     client, m.key, m.model,
-                    speak_messages(speaker, m.topic, m.details, transcript, round_no, m.total, research),
+                    speak_messages(speaker, m.topic, m.details, transcript,
+                                   round_no, m.total, research),
                 ):
                     buffer.append(delta)
-                    m._emit("token", {"id": speaker["id"], "text": delta})
+                    yield _ev(m, "token", {"id": speaker["id"], "text": delta}, persist=False)
                 text = "".join(buffer).strip() or "(stayed silent)"
                 m.history.append({"name": speaker["name"], "text": text})
                 last_speaker = speaker["name"]
-                m._emit("turn_end", {"id": speaker["id"], "name": speaker["name"], "text": text})
+                yield _ev(m, "turn_end", {"id": speaker["id"], "name": speaker["name"], "text": text})
 
-            # Closing decision ---------------------------------------------
-            m._emit("deciding", {})
+                # Partial durability: save after each completed turn.
+                db.save(m.id, m.log, "running", "")
+
+            # Closing decision
+            yield _ev(m, "deciding", {})
+            dbuf = []
             async for delta in stream_completion(
                 client, m.key, m.model,
                 decision_messages(m.topic, m.details, m.history),
                 max_tokens=600, temperature=0.3,
             ):
-                m._emit("decision_token", {"text": delta})
+                dbuf.append(delta)
+                yield _ev(m, "decision_token", {"text": delta}, persist=False)
+            decision_text = "".join(dbuf).strip()
+            m.log.append({"event": "decision", "data": {"text": decision_text}})
 
         m.status = "done"
-        m._emit("done", {"status": "done"})
+        yield _ev(m, "done", {"status": "done"})
+        db.save(m.id, m.log, "done", decision_text)
     except Exception as e:
         m.status = "error"
-        m._emit("error", {"message": friendly_error(e)})
-        m._emit("done", {"status": "error"})
+        yield _ev(m, "error", {"message": friendly_error(e)})
+        yield _ev(m, "done", {"status": "error"})
+        db.save(m.id, m.log, "error", decision_text)
 
 
-async def event_stream(meeting):
-    """Async generator that replays past events then follows live ones."""
-    idx = 0
-    while True:
-        while idx < len(meeting.events):
-            yield meeting.events[idx]
-            idx += 1
-        if meeting.status != "running" and idx >= len(meeting.events):
-            return
-        await meeting.wait_for_event()
+async def replay(meeting_id):
+    """Re-emit a finished meeting's stored log as live-looking events."""
+    row = db.get(meeting_id)
+    if not row:
+        return
+    import json
+    log = json.loads(row["log"] or "[]")
+    for e in log:
+        ev, data = e["event"], e["data"]
+        if ev == "turn_end":
+            # reconstruct the streamed bubble from the stored full text
+            yield {"event": "token", "data": {"id": data.get("id"), "text": data.get("text", "")}}
+            yield {"event": "turn_end", "data": data}
+        elif ev == "decision":
+            yield {"event": "decision_token", "data": {"text": data.get("text", "")}}
+        else:
+            yield {"event": ev, "data": data}
+    # make sure the UI marks it finished even on older partial logs
+    if not any(e["event"] == "done" for e in log):
+        yield {"event": "done", "data": {"status": row["status"]}}
+        await asyncio.sleep(0)

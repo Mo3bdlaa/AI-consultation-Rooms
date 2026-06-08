@@ -119,6 +119,7 @@
     <button class="btn" id="newBtn">＋ New meeting</button>
     <button class="btn ghost" id="settingsBtn">⚙ Settings</button>
     <div class="mlist" id="mlist"><h4>Meetings</h4></div>
+    <a class="btn ghost" id="logoutBtn" href="/logout" style="margin-top:auto;text-align:center;text-decoration:none">Sign out</a>
   </aside>
 
   <div class="content">
@@ -348,7 +349,9 @@ $('startBtn').onclick = async ()=>{
 function setActive(id){ [...document.querySelectorAll('.mitem')].forEach(el=> el.classList.toggle('active', el.dataset.id===id)); }
 async function loadMeetings(){
   try{
-    const j=await (await fetch('/api/meetings')).json();
+    const res=await fetch('/api/meetings');
+    if(res.status===401){ location.href='/login'; return; }
+    const j=await res.json();
     const list=$('mlist'); list.innerHTML='<h4>Meetings</h4>';
     j.meetings.forEach(m=>{
       const el=document.createElement('div'); el.className='mitem'+(m.id===currentId?' active':''); el.dataset.id=m.id;
